@@ -39,10 +39,10 @@ class OxfordPetDataset(torch.utils.data.Dataset):
         trimap = np.array(Image.open(mask_path))
         mask = self._preprocess_mask(trimap)
 
-        sample = dict(image=image, mask=mask, trimap=trimap)
+        sample = dict(image=image, mask=mask)
         if self.transform is not None:
             sample = self.transform(**sample)
-
+            sample["mask"] = sample["mask"].unsqueeze(0)
         return sample
 
     @staticmethod
@@ -141,13 +141,15 @@ def get_preprocess(train=True):
             A.HorizontalFlip(p=0.5),
             A.RandomBrightnessContrast(p=0.2),
             A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
-            ToTensorV2()
+            A.RandomRotate90(p=0.5),
+            A.GridDistortion(p=0.3),
+            ToTensorV2(transpose_mask=True)
         ])
     else:
         return A.Compose([
             A.Resize(256, 256),
             A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
-            ToTensorV2()
+            ToTensorV2(transpose_mask=True)
         ])
 
 
@@ -157,8 +159,8 @@ def load_dataset(data_path, mode):
 
     # implement the load dataset function here
     transform = get_preprocess(train=(mode == "train"))
-    dataset = SimpleOxfordPetDataset(root=data_path, mode=mode)
-
+    dataset = OxfordPetDataset(root=data_path, mode=mode, transform=transform)
+    # dataset = SimpleOxfordPetDataset(root=data_path, mode=mode)
 
     return dataset
 
