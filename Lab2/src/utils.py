@@ -86,7 +86,7 @@ def visualize(images, predictions, masks, save=True):
         axs[i, 2].axis('off')
 
     plt.tight_layout()
-    plt.show()
     if(save):
         plt.savefig("outputs/visualization.png")
+    plt.show()
     

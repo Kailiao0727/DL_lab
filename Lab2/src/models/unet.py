@@ -54,8 +54,6 @@ class UNet(nn.Module):
         for idx in range(0, len(self.ups), 2):
             x = self.ups[idx](x)
             skip = skip_connections[idx // 2]
-            if x.shape != skip.shape:
-                x = F.interpolate(x, size=skip.shape[2:])
             x = torch.cat((skip, x), dim=1)
             x = self.ups[idx+1](x)
 

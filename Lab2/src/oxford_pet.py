@@ -136,13 +136,13 @@ def extract_archive(filepath):
 def get_preprocess(train=True):
     if train:
         return A.Compose([
-            A.Resize(256, 256),
-            A.ElasticTransform(alpha=120, sigma=120 * 0.05, p=0.5),
+            A.RandomResizedCrop(size=(256, 256), scale=(0.8, 1.0)),
             A.HorizontalFlip(p=0.5),
+            A.ElasticTransform(alpha=120, sigma=120 * 0.05, p=0.5),
+            A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=15, p=0.5),
             A.RandomBrightnessContrast(p=0.2),
+            A.GridDistortion(num_steps=5, distort_limit=0.3, p=0.5),
             A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
-            A.RandomRotate90(p=0.5),
-            A.GridDistortion(p=0.3),
             ToTensorV2(transpose_mask=True)
         ])
     else:

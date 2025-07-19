@@ -4,7 +4,6 @@ import torch.nn.functional as F
 
 
 class BasicBlock(nn.Module):
-    expansion = 1
     def __init__(self, in_channels, out_channels, stride=1, downsample=None):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
@@ -33,18 +32,6 @@ class BasicBlock(nn.Module):
 
 
 class Encoder(nn.Module):
-    """
-    A ResNet-34 encoder, modified so that:
-     - the first 7x7 conv uses stride=1 (so we keep full input spatial size at x0),
-     - then a 3x3 stride-2 maxpool produces x1 at 1/2 size,
-     - layers 1-4 follow ResNet-34's block counts [3,4,6,3] with down-sampling at the start of layers 2–4.
-    We return five feature maps for skip-connections at scales:
-      x0:    [B,  64, H,   W  ]   ← after conv1
-      x2:    [B,  64, H/2, W/2]   ← after layer1
-      x3:    [B, 128, H/4, W/4]   ← after layer2
-      x4:    [B, 256, H/8, W/8]   ← after layer3
-      x5:    [B, 512, H/16,W/16]  ← after layer4
-    """
     def __init__(self, in_channels=3):
         super().__init__()
         self.inplanes = 64
@@ -62,19 +49,17 @@ class Encoder(nn.Module):
         self.layer4 = self._make_layer(512, 3, stride=2)
 
     def _make_layer(self, out_channels, blocks, stride):
-        """Create one layer of BasicBlocks, with optional downsampling."""
         downsample = None
         if stride != 1 or self.inplanes != out_channels:
             downsample = nn.Sequential(
-                nn.Conv2d(self.inplanes, out_channels,
-                          kernel_size=1, stride=stride, bias=False),
+                nn.Conv2d(self.inplanes, out_channels,kernel_size=1, stride=stride, bias=False),
                 nn.BatchNorm2d(out_channels),
             )
         layers = []
-        # first block may downsample
+
         layers.append(BasicBlock(self.inplanes, out_channels, stride, downsample))
         self.inplanes = out_channels
-        # remaining blocks
+
         for _ in range(1, blocks):
             layers.append(BasicBlock(self.inplanes, out_channels))
         return nn.Sequential(*layers)
@@ -90,13 +75,9 @@ class Encoder(nn.Module):
 
 
 class UpBlock(nn.Module):
-    """Upsampling + double-conv for decoder."""
     def __init__(self, in_channels, skip_channels, out_channels):
         super().__init__()
-        # learnable upsampling
-        self.up = nn.ConvTranspose2d(in_channels, out_channels,
-                                     kernel_size=2, stride=2)
-        # followed by two 3×3 convs (with BN+ReLU)
+        self.up = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2)
         self.conv = nn.Sequential(
             nn.Conv2d(out_channels + skip_channels, out_channels,
                       kernel_size=3, padding=1, bias=False),
@@ -110,43 +91,31 @@ class UpBlock(nn.Module):
 
     def forward(self, x, skip):
         x = self.up(x)
-        # if due to rounding we miss the exact size, resize
-        if x.shape[2:] != skip.shape[2:]:
-            x = F.interpolate(x, size=skip.shape[2:], mode='bilinear', align_corners=False)
-        # channel-wise concat
         x = torch.cat([x, skip], dim=1)
         return self.conv(x)
 
 
 class ResNet34_UNet(nn.Module):
-    """
-    Combines the above ResNet-34 encoder with a U-Net decoder, using 4 UpBlocks to
-    return a segmentation map of the same spatial size as the input.
-    """
     def __init__(self, in_channels=3, out_channels=1):
         super().__init__()
         self.encoder = Encoder(in_channels=in_channels)
 
-        # decoder: note channel counts match the encoder skips
-        self.up4 = UpBlock(512, 256, 256)  # 1/16 → 1/8
-        self.up3 = UpBlock(256, 128, 128)  # 1/8  → 1/4
-        self.up2 = UpBlock(128, 64,  64)   # 1/4  → 1/2
-        self.up1 = UpBlock(64,  64,  64)   # 1/2  →   1
+        self.up4 = UpBlock(512, 256, 256)
+        self.up3 = UpBlock(256, 128, 128)
+        self.up2 = UpBlock(128, 64,  64)
+        self.up1 = UpBlock(64,  64,  64)
 
-        # final 1×1 conv to map to the desired number of classes
         self.final = nn.Conv2d(64, out_channels, kernel_size=1)
 
     def forward(self, x):
-        # collect encoder features
         enc_feats = self.encoder(x)
         # bottom
-        x = enc_feats[-1]        # [B,512,H/16,W/16]
-        # 4 up-blocks, each halves the feature-map channels and doubles spatial size
-        x = self.up4(x, enc_feats[-2])  # +skip @ H/8
-        x = self.up3(x, enc_feats[-3])  # +skip @ H/4
-        x = self.up2(x, enc_feats[-4])  # +skip @ H/2
-        x = self.up1(x, enc_feats[-5])  # +skip @ H
-        # final conv
+        x = enc_feats[-1]
+        x = self.up4(x, enc_feats[-2])
+        x = self.up3(x, enc_feats[-3])
+        x = self.up2(x, enc_feats[-4])
+        x = self.up1(x, enc_feats[-5])
+
         x = self.final(x)
-        return torch.sigmoid(x)  # for binary mask in [0,1]
+        return torch.sigmoid(x)
 

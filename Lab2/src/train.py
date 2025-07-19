@@ -45,8 +45,10 @@ def train(args):
         start_epoch = checkpoint['epoch'] + 1
         prev_loss = checkpoint['loss']
         print(f"Resuming training from epoch {start_epoch}, previous loss: {prev_loss:.4f}")
+        train_losses = checkpoint.get('train_losses', [])
     else:
         start_epoch = 0
+        train_losses = []
 
     criterion = torch.nn.BCELoss()
     # criterion = DSCPlusPlusLoss(gamma=0.5)
@@ -54,7 +56,6 @@ def train(args):
 
     dice_loss_fn = DSCPlusPlusLoss(gamma=0.5)
     bce_loss_fn = torch.nn.BCELoss()
-    train_losses = []
     for epoch in range(start_epoch, args.epochs):
         model.train()
         epoch_loss = 0
@@ -65,10 +66,10 @@ def train(args):
             masks = batch["mask"].to(device, dtype=torch.float32)
 
             outputs = model(images)
-            loss_dice = dice_loss_fn(outputs, masks)
-            loss_bce = bce_loss_fn(outputs, masks)
-            loss = (1 - 0.5) * loss_dice + 0.5 * loss_bce
-            # loss = criterion(outputs, masks)
+            # loss_dice = dice_loss_fn(outputs, masks)
+            # loss_bce = bce_loss_fn(outputs, masks)
+            # loss = (1 - 0.5) * loss_dice + 0.5 * loss_bce
+            loss = dice_loss_fn(outputs, masks)
 
             optimizer.zero_grad()
             loss.backward()
@@ -86,12 +87,13 @@ def train(args):
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            'loss': avg_loss
+            'loss': avg_loss,
+            'train_losses': train_losses
         }
         torch.save(checkpoint, "saved_models/"+ args.model + "_checkpoint.pth")
         torch.save(model.state_dict(), "saved_models/"+args.model+".pth")
     plot(train_losses=train_losses, epochs=args.epochs, model=args.model, show=True)
-    print("Model weights saved to saved_models/unet.pth")
+    print("Model weights saved")
     
 
 
