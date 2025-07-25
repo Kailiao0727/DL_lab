@@ -1,0 +1,6 @@
+**/checkpoints/
+test_results/
+transformer_checkpoints/
+mask_scheduling/
+imga/
+lab3_dataset/
