@@ -53,8 +53,6 @@ class MaskGIT:
             #iterative decoding for loop design
             #Hint: it's better to save original mask and the updated mask by scheduling separately
             for step in range(self.total_iter):
-                if step == self.sweet_spot:
-                    break
                 ratio = (step + 1) / self.total_iter #this should be updated
                 z_indices_predict, mask_bc = self.model.inpainting(z_indices=z_indices_predict, mask=mask_bc, num_mask=mask_num, r=ratio, mask_func=self.mask_func)
                 if torch.any(z_indices_predict >= self.model.vqgan.codebook.embedding.num_embeddings):
@@ -73,9 +71,9 @@ class MaskGIT:
                 decoded_img=self.model.vqgan.decode(z_q)
                 dec_img_ori=(decoded_img[0]*std)+mean
                 imga[step+1]=dec_img_ori #get decoded image
-
-            ##decoded image of the sweet spot only, the test_results folder path will be the --predicted-path for fid score calculation
-            vutils.save_image(dec_img_ori, os.path.join("test_results", f"image_{i:03d}.png"), nrow=1) 
+                if step == self.sweet_spot:
+                    ##decoded image of the sweet spot only, the test_results folder path will be the --predicted-path for fid score calculation
+                    vutils.save_image(dec_img_ori, os.path.join("test_results", f"image_{i:03d}.png"), nrow=1) 
 
             #demo score 
             vutils.save_image(maska, os.path.join("mask_scheduling", f"test_{i}.png"), nrow=10) 

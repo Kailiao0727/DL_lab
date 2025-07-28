@@ -4,3 +4,5 @@ transformer_checkpoints/
 mask_scheduling/
 imga/
 lab3_dataset/
+**.pyc
+**.png

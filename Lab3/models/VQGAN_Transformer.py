@@ -84,8 +84,6 @@ class MaskGit(nn.Module):
 ##TODO3 step1-1: define one iteration decoding   
     @torch.no_grad()
     def inpainting(self, z_indices, mask, num_mask, r = 1.0, mask_func="cosine"):
-        if(torch.any(z_indices[~mask] >= self.mask_token_id)):
-            print("Warning: Found z_indices ≥ mask_token_id!!!!!")
         B, N = z_indices.shape
         device = z_indices.device
         z_indices_with_mask = mask * self.mask_token_id + (~mask) * z_indices
@@ -97,8 +95,6 @@ class MaskGit(nn.Module):
 
         #FIND MAX probability for each token value
         z_indices_predict_prob, z_indices_predict = logits.max(dim=-1)
-        if torch.any(z_indices_predict >= self.mask_token_id):
-            print("Warning: Found predicted token index ≥ 1024!")
 
         mask_ratio = self.gamma_func(mask_func)(r)
 
@@ -128,8 +124,6 @@ class MaskGit(nn.Module):
         ##At the end of the decoding process, add back the original(non-masked) token values
         z_indices_predict = mask * z_indices_predict + (~mask) * z_indices
         
-        if torch.any(z_indices_predict >= self.mask_token_id):
-            print("Warning: Found predicted token index ≥ 1024!!!")
         return z_indices_predict, next_mask
     
 __MODEL_TYPE__ = {
