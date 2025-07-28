@@ -72,7 +72,8 @@ class MaskGit(nn.Module):
         device = z_indices.device
 
         # Random masking
-        rand_mask = torch.rand(B, N, device=device) < torch.rand(1).item()
+        mask_ratio = np.random.uniform(0.3, 0.7)
+        rand_mask = torch.rand(B, N, device=device) < mask_ratio
         masked_input = z_indices.clone()
         masked_input[rand_mask] = self.mask_token_id
 
@@ -82,17 +83,13 @@ class MaskGit(nn.Module):
     
 ##TODO3 step1-1: define one iteration decoding   
     @torch.no_grad()
-    def inpainting(self, z_indices=None, mask=None, r = 1.0, mask_func="cosine"):
+    def inpainting(self, z_indices, mask, num_mask, r = 1.0, mask_func="cosine"):
         if(torch.any(z_indices[~mask] >= self.mask_token_id)):
             print("Warning: Found z_indices ≥ mask_token_id!!!!!")
         B, N = z_indices.shape
         device = z_indices.device
-
-        # if mask is None:
-        #     z_indices_predict = torch.full_like(z_indices, self.mask_token_id)
-        #     mask = torch.ones_like(z_indices, dtype=torch.bool)
-
-        logits = self.transformer(z_indices)
+        z_indices_with_mask = mask * self.mask_token_id + (~mask) * z_indices
+        logits = self.transformer(z_indices_with_mask)
         #Apply softmax to convert logits into a probability distribution across the last dimension.
         
         logits[..., self.mask_token_id] = float('-inf')
@@ -117,13 +114,17 @@ class MaskGit(nn.Module):
         #define how much the iteration remain predicted tokens by mask scheduling
         next_mask = mask.clone()
         current_masked = mask.sum(dim=1)
-        num_unmask = (current_masked * (1 - mask_ratio)).long()
+        num_unmask = (mask.shape[1] - num_mask*mask_ratio).long()
+        # print(f"Mask ratio: {mask_ratio}, Current masked tokens: {current_masked}, num_unmask: {num_unmask}")
 
-        for b in range(B):
-            # keep only the top num_mask tokens masked
-            unmask_idx = sorted_indices[b, :num_unmask[b]]
-            next_mask[b, unmask_idx] = False
         
+        if num_unmask[0] > 0:
+            # keep only the top num_mask tokens masked
+            unmask_idx = sorted_indices[0, -num_unmask[0]:]
+            next_mask[0, unmask_idx] = False
+        # print(f"Next mask shape: {next_mask.shape}, Next mask sum: {next_mask.sum(dim=1)}")
+        
+
         ##At the end of the decoding process, add back the original(non-masked) token values
         z_indices_predict = mask * z_indices_predict + (~mask) * z_indices
         

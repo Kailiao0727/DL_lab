@@ -43,7 +43,7 @@ class MaskGIT:
         with torch.no_grad():
             z_indices = self.model.encode_to_z(image) #z_indices: masked tokens (b,16*16)
             # print(f"z_indices shape: {z_indices.shape}")
-            mask_num = mask_b.sum() #total number of mask token 
+            mask_num = mask_b.sum(dim=1) #total number of mask token 
             z_indices_predict=z_indices.clone()
             mask_bc=mask_b
             mask_b=mask_b.to(device=self.device)
@@ -56,7 +56,7 @@ class MaskGIT:
                 if step == self.sweet_spot:
                     break
                 ratio = (step + 1) / self.total_iter #this should be updated
-                z_indices_predict, mask_bc = self.model.inpainting(z_indices=z_indices_predict, mask=mask_bc, r=ratio, mask_func=self.mask_func)
+                z_indices_predict, mask_bc = self.model.inpainting(z_indices=z_indices_predict, mask=mask_bc, num_mask=mask_num, r=ratio, mask_func=self.mask_func)
                 if torch.any(z_indices_predict >= self.model.vqgan.codebook.embedding.num_embeddings):
                     print("Invalid index in z_indices_predict!")
 
