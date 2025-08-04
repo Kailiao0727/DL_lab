@@ -337,6 +337,16 @@ class VAE_Model(nn.Module):
         nn.utils.clip_grad_norm_(self.parameters(), 1.)
         self.optim.step()
 
+    def adjust_video_length(self):
+        if self.current_epoch == 0:
+            self.train_vi_len = 2
+        elif self.current_epoch == 10:
+            self.train_vi_len = 4
+        elif self.current_epoch == 20:
+            self.train_vi_len = 8
+        elif self.current_epoch == 30:
+            self.train_vi_len = 16
+
 
 
 def main(args):
