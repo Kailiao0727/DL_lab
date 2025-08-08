@@ -1,0 +1,7 @@
+checkpoints/
+results/
+*.pt
+eval_videos/
+wandb/
+wandb-task1/
+wandb-task2/
