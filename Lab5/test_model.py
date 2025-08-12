@@ -11,6 +11,7 @@ import os
 from collections import deque
 import argparse
 from dqn import DQN_task1, DQN_task2, AtariPreprocessor
+from ddqn import DuelingDQN
 
 
 
@@ -60,6 +61,9 @@ def evaluate(args):
 
     if args.env_name == "CartPole-v1":
         model = DQN_task1(num_actions).to(device)
+        model.load_state_dict(torch.load(args.model_path, map_location=device))
+    elif args.dualing:
+        model = DuelingDQN(num_actions).to(device)
         model.load_state_dict(torch.load(args.model_path, map_location=device))
     else:
         model = DQN_task2(num_actions).to(device)
@@ -115,9 +119,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", type=str, required=True, help="Path to trained .pt model")
     parser.add_argument("--output-dir", type=str, default="./eval_videos")
-    parser.add_argument("--episodes", type=int, default=10)
+    parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument("--seed", type=int, default=313551076, help="Random seed for evaluation")
     parser.add_argument("--env-name", type=str, default="CartPole-v1")
+    parser.add_argument("--dualing", action="store_true", help="Use Dueling DQN architecture")
     args = parser.parse_args()
     evaluate(args)
 

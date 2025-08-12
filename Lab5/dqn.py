@@ -34,15 +34,7 @@ class DQN_task1(nn.Module):
         - Feel free to add any member variables/functions whenever needed
     """
     def __init__(self, num_actions, input_channels=4):
-        super(DQN_task1, self).__init__()
-        # An example: 
-        #self.network = nn.Sequential(
-        #    nn.Linear(input_dim, 64),
-        #    nn.ReLU(),
-        #    nn.Linear(64, 64),
-        #    nn.ReLU(),
-        #    nn.Linear(64, num_actions)
-        #)       
+        super(DQN_task1, self).__init__()     
         ########## YOUR CODE HERE (5~10 lines) ##########
         self.network = nn.Sequential(
             nn.Linear(input_channels, 64),
@@ -127,13 +119,8 @@ class PrioritizedReplayBuffer:
 
 class DQNAgent:
     def __init__(self, args=None):
-        if args.env_name == "CartPole-v1":
-            render_md = "rgb_array"
-        else :
-            render_md = "rgb_array"
-        print(args.env_name, render_md)
-        self.env = gym.make(args.env_name, render_mode=render_md)
-        self.test_env = gym.make(args.env_name, render_mode=render_md)
+        self.env = gym.make(args.env_name, render_mode="rgb_array")
+        self.test_env = gym.make(args.env_name, render_mode="rgb_array")
         self.num_actions = self.env.action_space.n
         self.preprocessor = AtariPreprocessor()
 
@@ -252,9 +239,9 @@ class DQNAgent:
 
             if ep % 20 == 0:
                 eval_reward = self.evaluate()
-                if eval_reward > self.best_reward:
+                if eval_reward >= self.best_reward:
                     self.best_reward = eval_reward
-                    model_path = os.path.join(self.save_dir, "best_model.pt")
+                    model_path = os.path.join(self.save_dir, f"best_model_{self.env_count}.pt") 
                     torch.save(self.q_net.state_dict(), model_path)
                     print(f"Saved new best model to {model_path} with reward {eval_reward}")
                 print(f"[TrueEval] Ep: {ep} Eval Reward: {eval_reward:.2f} SC: {self.env_count} UC: {self.train_count}")
@@ -295,7 +282,8 @@ class DQNAgent:
         
         # Decay function for epsilin-greedy exploration
         if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
+            # self.epsilon *= self.epsilon_decay
+            self.epsilon -= 0.00000099
         self.train_count += 1
        
         ########## YOUR CODE HERE (<5 lines) ##########
@@ -337,7 +325,7 @@ class DQNAgent:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--save-dir", type=str, default="./results")
+    parser.add_argument("--save-dir", type=str, default="./task2_results")
     parser.add_argument("--wandb-run-name", type=str, default="task2-run")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--memory-size", type=int, default=100000)
@@ -359,5 +347,5 @@ if __name__ == "__main__":
     agent.run(args.episodes)
     
 
-#--discount-factor 0.9 --epsilon-decay 0.99 --replay-start-size 10000 --epsilon-min 0.2 --max-episode-steps 200 --lr 0.0025 --episodes 1000
+#--discount-factor 0.9 --epsilon-decay 0.99 --replay-start-size 10000 --epsilon-min 0.2 --lr 0.0025 --episodes 1000
 # --env-name ALE/Pong-v5 --train-per-step 4 --epsilon-min 0.01

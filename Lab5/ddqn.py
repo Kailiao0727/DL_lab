@@ -26,6 +26,30 @@ def init_weights(m):
         if m.bias is not None:
             nn.init.constant_(m.bias, 0)
 
+class DuelingDQN(nn.Module):
+    def __init__(self, num_actions, input_channels=4):
+        super(DuelingDQN, self).__init__()
+        self.feature = nn.Sequential(
+            nn.Conv2d(input_channels, 32, 8, stride=4), nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(64, 64, 3, stride=1), nn.ReLU(),
+            nn.Flatten()
+        )
+        self.fc = nn.Linear(3136, 512)
+        
+        # Two streams
+        self.value_stream = nn.Linear(512, 1)
+        self.advantage_stream = nn.Linear(512, num_actions)
+
+    def forward(self, x):
+        x = x / 255.0
+        x = self.feature(x)
+        x = torch.relu(self.fc(x))
+        value = self.value_stream(x)
+        advantage = self.advantage_stream(x)
+        q_values = value + advantage - advantage.mean(dim=1, keepdim=True)
+        return q_values
+
 
 class DQN_task2(nn.Module):
     def __init__(self, num_actions, input_channels=4):
@@ -155,7 +179,7 @@ class PrioritizedReplayBuffer:
             Update the beta value for importance sampling
         """
         if self.beta < 1.0:
-            self.beta += 0.000001
+            self.beta += 0.00001
         
 
 class DQNAgent:
@@ -168,22 +192,20 @@ class DQNAgent:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("Using device:", self.device)
 
-        if args.env_name == "CartPole-v1":
-            self.use_preprocessor = False
-            self.q_net = DQN_task1(self.num_actions).to(self.device)
-            self.q_net.apply(init_weights)
-            self.target_net = DQN_task1(self.num_actions).to(self.device)
-            self.target_net.load_state_dict(self.q_net.state_dict())
-            self.optimizer = optim.Adam(self.q_net.parameters(), lr=args.lr)
-            self.best_reward = 0   # Initilized to 0 for CartPole and to -21 for Pong
+
+        self.use_preprocessor = True
+        if args.dualing:
+            self.q_net = DuelingDQN(self.num_actions).to(self.device)
         else:
-            self.use_preprocessor = True
             self.q_net = DQN_task2(self.num_actions).to(self.device)
-            self.q_net.apply(init_weights)
+        self.q_net.apply(init_weights)
+        if args.dualing:
+            self.target_net = DuelingDQN(self.num_actions).to(self.device)
+        else:
             self.target_net = DQN_task2(self.num_actions).to(self.device)
-            self.target_net.load_state_dict(self.q_net.state_dict())
-            self.optimizer = optim.Adam(self.q_net.parameters(), lr=args.lr)
-            self.best_reward = -21
+        self.target_net.load_state_dict(self.q_net.state_dict())
+        self.optimizer = optim.Adam(self.q_net.parameters(), lr=args.lr)
+        self.best_reward = -21
         
         # self.q_net = DQN(self.num_actions, input_channels).to(self.device)
         # self.q_net.apply(init_weights)
@@ -194,8 +216,12 @@ class DQNAgent:
         self.batch_size = args.batch_size
         self.gamma = args.discount_factor
         self.epsilon = args.epsilon_start
-        self.epsilon_decay = args.epsilon_decay
+        self.epsilon_decay_steps = args.epsilon_decay_steps
+        self.epsilon_start = args.epsilon_start
         self.epsilon_min = args.epsilon_min
+        self.n_step = args.n_step
+        self.beta_start = 0.4
+        self.beta_anneal_steps = args.beta_anneal_steps
 
         self.env_count = 0
         self.train_count = 0
@@ -205,10 +231,11 @@ class DQNAgent:
         self.target_update_frequency = args.target_update_frequency
         self.train_per_step = args.train_per_step
         self.save_dir = args.save_dir
+        self.restart_ep = 0
         os.makedirs(self.save_dir, exist_ok=True)
         
         # Initialize replay buffer
-        self.memory = PrioritizedReplayBuffer(args.memory_size, alpha=0.6, beta_start=0.4, n_step=3, gamma=self.gamma)
+        self.memory = PrioritizedReplayBuffer(args.memory_size, alpha=0.6, beta_start=0.4, n_step=args.n_step, gamma=self.gamma)
 
     def select_action(self, state):
         if random.random() < self.epsilon:
@@ -219,7 +246,8 @@ class DQNAgent:
         return q_values.argmax().item()
 
     def run(self, episodes=1000):
-        for ep in range(episodes):
+        self.resume()
+        for ep in range(self.restart_ep, episodes):
             obs, _ = self.env.reset()
             if self.use_preprocessor:
                 state = self.preprocessor.reset(obs)
@@ -275,15 +303,15 @@ class DQNAgent:
             
             ########## END OF YOUR CODE ##########  
             if ep % 100 == 0:
-                model_path = os.path.join(self.save_dir, f"model_ep{ep}.pt")
+                model_path = os.path.join(self.save_dir, f"model_{self.env_count}.pt")
                 torch.save(self.q_net.state_dict(), model_path)
                 print(f"Saved model checkpoint to {model_path}")
 
             if ep % 20 == 0:
                 eval_reward = self.evaluate()
-                if eval_reward > self.best_reward:
+                if eval_reward >= self.best_reward:
                     self.best_reward = eval_reward
-                    model_path = os.path.join(self.save_dir, "best_model.pt")
+                    model_path = os.path.join(self.save_dir, f"best_model_{self.env_count}.pt")
                     torch.save(self.q_net.state_dict(), model_path)
                     print(f"Saved new best model to {model_path} with reward {eval_reward}")
                 print(f"[TrueEval] Ep: {ep} Eval Reward: {eval_reward:.2f} SC: {self.env_count} UC: {self.train_count}")
@@ -323,9 +351,13 @@ class DQNAgent:
             return 
         
         # Decay function for epsilin-greedy exploration
-        if self.epsilon > self.epsilon_min:
+        # if self.epsilon > self.epsilon_min:
             # self.epsilon *= self.epsilon_decay
-            self.epsilon -= 0.00000099
+            # self.epsilon -= 0.00000099
+        frac = min(1.0, self.env_count / self.epsilon_decay_steps)
+        self.epsilon = max(self.epsilon_min, self.epsilon_start - frac * (self.epsilon_start - self.epsilon_min))
+        beta_frac = min(1.0, self.env_count / self.beta_anneal_steps)
+        self.memory.beta = self.beta_start + beta_frac * (1.0 - self.beta_start)
         self.train_count += 1
        
         ########## YOUR CODE HERE (<5 lines) ##########
@@ -352,20 +384,23 @@ class DQNAgent:
             # Task3
             next_actions = self.q_net(next_states).argmax(1)
             next_q_values = self.target_net(next_states).gather(1, next_actions.unsqueeze(1)).squeeze(1)
-            target_q_values = rewards + (self.gamma ** args.n_step) * next_q_values * (1 - dones)
+            target_q_values = rewards + (self.gamma ** self.n_step) * next_q_values * (1 - dones)
 
 
         
-        losses = (q_values - target_q_values).pow(2)
+        # losses = (q_values - target_q_values).pow(2)
+        losses = torch.nn.functional.smooth_l1_loss(q_values, target_q_values, reduction="none")
         loss = (losses * weights).mean()
 
-        errors = (q_values - target_q_values).detach().cpu().numpy()
+        errors = (q_values - target_q_values).detach().abs().cpu().numpy()
         self.memory.update_priorities(indices, errors)
         
         self.optimizer.zero_grad()
         loss.backward()
+
+        nn.utils.clip_grad_norm_(self.q_net.parameters(), max_norm=10.0)
+
         self.optimizer.step()
-        self.memory.beta_update()
         ########## END OF YOUR CODE ##########  
 
         if self.train_count % self.target_update_frequency == 0:
@@ -374,7 +409,17 @@ class DQNAgent:
         # NOTE: Enable this part if "loss" is defined
         if self.train_count % 1000 == 0:
            print(f"[Train #{self.train_count}] Loss: {loss.item():.4f} Q mean: {q_values.mean().item():.3f} std: {q_values.std().item():.3f}")
-
+    
+    def resume(self):
+        state_dict = torch.load("task3_results_dual/best_model_1220703.pt", map_location=self.device)
+        self.q_net.load_state_dict(state_dict)
+        self.target_net.load_state_dict(self.q_net.state_dict())
+        self.optimizer = optim.Adam(self.q_net.parameters(), lr=0.00001)
+        self.env_count = 1220703
+        self.train_count = 1226000
+        self.memory.beta = 1.0
+        self.epsilon = 0.01
+        self.restart_ep = 541
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -382,18 +427,20 @@ if __name__ == "__main__":
     parser.add_argument("--wandb-run-name", type=str, default="task3-run")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--memory-size", type=int, default=100000)
-    parser.add_argument("--lr", type=float, default=0.0001)
+    parser.add_argument("--lr", type=float, default=0.00001)
     parser.add_argument("--discount-factor", type=float, default=0.99)
     parser.add_argument("--epsilon-start", type=float, default=1.0)
-    parser.add_argument("--epsilon-decay", type=float, default=0.999999)
-    parser.add_argument("--epsilon-min", type=float, default=0.05)
+    parser.add_argument("--epsilon-decay-steps", type=int, default=500000)
+    parser.add_argument("--epsilon-min", type=float, default=0.01)
     parser.add_argument("--target-update-frequency", type=int, default=1000)
     parser.add_argument("--replay-start-size", type=int, default=50000)
     parser.add_argument("--max-episode-steps", type=int, default=10000)
-    parser.add_argument("--train-per-step", type=int, default=1)
+    parser.add_argument("--train-per-step", type=int, default=4)
     parser.add_argument("--env-name", type=str, default="ALE/Pong-v5")
     parser.add_argument("--episodes", type=int, default=1000)
     parser.add_argument("--n-step", type=int, default=3)
+    parser.add_argument("--beta-anneal-steps", type=int, default=1_000_000)
+    parser.add_argument("--dualing", action="store_true", help="Use Dueling DQN architecture")
     args = parser.parse_args()
 
     wandb.init(project="DLP-Lab5-DQN-Atari", name=args.wandb_run_name, save_code=True)
@@ -402,4 +449,6 @@ if __name__ == "__main__":
     
 
 #--discount-factor 0.9 --epsilon-decay 0.99 --replay-start-size 10000 --epsilon-min 0.2 --max-episode-steps 200 --lr 0.0025 --episodes 1000
-# --env-name ALE/Pong-v5 --train-per-step 4 --epsilon-min 0.01
+# --env-name ALE/Pong-v5 --train-per-step 4 --episodes 1500 --memory-size 500000 --replay-start-size 80000 --target-update-frequency 5000
+
+# --env-name ALE/Pong-v5 --episodes 1500 --memory-size 500000 --replay-start-size 80000 --target-update-frequency 8000 --lr 0.0000625 --save-dir ./task3_results

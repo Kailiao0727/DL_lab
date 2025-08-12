@@ -5,3 +5,6 @@ eval_videos/
 wandb/
 wandb-task1/
 wandb-task2/
+wandb-task2-2/
+__pycache__/
+*.pyc
