@@ -24,7 +24,7 @@ def denormalize(x: torch.Tensor) -> torch.Tensor:
     # inverse of Normalize((0.5,)*3, (0.5,)*3)
     return x * 0.5 + 0.5
 
-
+##dd
 
 
 def sample_batch(loader: DataLoader) -> Tuple[torch.Tensor, torch.Tensor]:
