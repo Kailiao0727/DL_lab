@@ -5,11 +5,14 @@ from typing import Tuple
 
 import torch
 from torch.utils.data import DataLoader
+from torchvision import transforms
 from torchvision.utils import save_image
+from tqdm import tqdm
 
 # --- project-relative imports ---
 from data.dataloader import ICLEVRDataset_train, ICLEVRDataset_eval
-from torchvision import transforms
+from models import ConditionalUNet, DDPMWrapper
+from evaluator.evaluator import evaluation_model
 
 
 def build_train_transform(image_size: int = 64, augment: bool = False):
@@ -24,44 +27,11 @@ def denormalize(x: torch.Tensor) -> torch.Tensor:
     # inverse of Normalize((0.5,)*3, (0.5,)*3)
     return x * 0.5 + 0.5
 
-##dd
-
-
-def sample_batch(loader: DataLoader) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Get one batch from a DataLoader."""
-    it = iter(loader)
-    batch = next(it)
-    # train loader returns (imgs, labels); eval loader returns (labels, idx)
-    if isinstance(batch, (tuple, list)) and len(batch) == 2:
-        a, b = batch
-        # try to figure out which is image by shape
-        if torch.is_tensor(a) and a.ndim == 4:   # (B,3,H,W)
-            imgs, labels = a, b
-        else:
-            imgs, labels = None, a  # label-only case
-    else:
-        raise RuntimeError("Unexpected batch structure")
-    return imgs, labels
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default="data")
-    parser.add_argument("--images_dirname", type=str, default="iclevr")
-    parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--image_size", type=int, default=64)
-    args = parser.parse_args()
-
-    data_dir = args.data_dir
-    images_dir = os.path.join(data_dir, args.images_dirname)
-
-    # -------- Train loader (images + labels) --------
+def train(args, device):
+    eval_model = evaluation_model()
     train_tf = build_train_transform(image_size=args.image_size, augment=False)
-    ds_train = ICLEVRDataset_train(
-        transform=train_tf,
-        data_path=data_dir,
-        images_dir=args.images_dirname,   # your class joins with data_path
-    )
+    ds_train = ICLEVRDataset_train(transform=train_tf, data_path=args.data_dir, images_dir=args.images_dirname)
+
     dl_train = torch.utils.data.DataLoader(
         ds_train,
         batch_size=args.batch_size,
@@ -71,15 +41,66 @@ def main():
         drop_last=True,
     )
 
-    ds_test = ICLEVRDataset_eval(data_path=data_dir, split="test")
-    dl_test = torch.utils.data.DataLoader(
-        ds_test,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=2,
-        pin_memory=True,
-        drop_last=False,
-    )
+    unet = ConditionalUNet(sample_size=args.image_size, label_dim=24, label_emb_size=512)
+    ddpm = DDPMWrapper(unet, num_train_timesteps=args.num_timesteps).to(device)
+
+    optimizer = torch.optim.AdamW(ddpm.parameters(), lr=args.lr)
+
+    for epoch in range(args.num_epochs):
+        ddpm.train()
+        total_loss = 0.0
+        pbar = tqdm(dl_train, desc=f"Epoch {epoch+1}/{args.num_epochs}", unit="batch")
+        for x0, labels in pbar:
+            x0, labels = x0.to(device), labels.to(device)
+
+            optimizer.zero_grad()
+            loss = ddpm.loss_step(x0, labels)
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item() * x0.size(0)
+            pbar.set_postfix({"loss": f"{loss.item():.4f}"})
+
+        avg_loss = total_loss / len(dl_train)
+        print(f"Epoch {epoch+1} - Avg Loss: {avg_loss:.6f}")
+
+        if (epoch + 1) % 10 == 0:
+            ddpm.eval()
+            with torch.no_grad():
+                labels_eval = labels[:8]   
+                samples = ddpm.sample(labels_eval, num_steps=args.num_timesteps, batch_size=8, device=device)
+
+            grid = denormalize(samples.clamp(-1,1))
+            os.makedirs("outputs", exist_ok=True)
+            save_image(grid, f"outputs/samples_epoch_{epoch+1}.png", nrow=8)
+            
+            acc = eval_model.eval(samples, labels_eval)
+            print(f"Epoch {epoch+1} - Evaluation Accuracy: {acc:.4f}")
+            os.makedirs("checkpoints", exist_ok=True)
+            torch.save({
+                "unet":unet.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "epoch": epoch + 1,
+            }, f"checkpoints/unet_{epoch+1}.pth")
+
+        
+    
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", type=str, default="data")
+    parser.add_argument("--images_dirname", type=str, default="iclevr")
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--image_size", type=int, default=64)
+    parser.add_argument("--num_timesteps", type=int, default=1000)
+    parser.add_argument("--num_epochs", type=int, default=100)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    args = parser.parse_args()
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    train(args, device)
 
 
 
