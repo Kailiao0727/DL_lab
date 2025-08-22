@@ -443,6 +443,7 @@ if __name__ == "__main__":
     parser.add_argument("--update-epoch", type=float, default=64)
     parser.add_argument("--ckpt_path", type=str, default="checkpoints")
     parser.add_argument("--test", action="store_true")
+    parser.add_argument("--load-model", type=str, default="snapshots/best_task2_196001.pth")
     args = parser.parse_args()
  
     # environment
@@ -457,7 +458,7 @@ if __name__ == "__main__":
     agent = PPOAgent(env, args)
     if (args.test):
         video_folder = f"videos/{args.wandb_run_name}"
-        agent.load_model("snapshots/best_task2_196001.pth")
+        agent.load_model(args.load_model)
         agent.test(video_folder)
     else:
         agent.train()
