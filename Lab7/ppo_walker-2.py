@@ -11,7 +11,7 @@ from collections import deque
 from typing import Deque, List, Tuple
 
 import gymnasium as gym
-
+import os
 import numpy as np
 import torch
 import torch.nn as nn
@@ -40,17 +40,31 @@ class Actor(nn.Module):
     ):
         """Initialize."""
         super(Actor, self).__init__()
-
+        self.log_std_min = log_std_min
+        self.log_std_max = log_std_max
         ############TODO#############
         # Remeber to initialize the layer weights
-        
+        self.fc1 = nn.Linear(in_dim, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.mu_head = nn.Linear(64, out_dim)
+        self.log_std_head = nn.Linear(64, out_dim)
+
+        init_layer_uniform(self.mu_head)
+        init_layer_uniform(self.log_std_head)
         #############################
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         """Forward method implementation."""
         
         ############TODO#############
+        x = F.tanh(self.fc1(state))
+        x = F.tanh(self.fc2(x))
+        mu = self.mu_head(x)
+        log_std = torch.tanh(self.log_std_head(x))
+        std = torch.exp(log_std)
 
+        dist = Normal(mu, std)
+        action = dist.sample()
         #############################
 
         return action, dist
@@ -63,14 +77,20 @@ class Critic(nn.Module):
 
         ############TODO#############
         # Remeber to initialize the layer weights
-        
+        self.fc1 = nn.Linear(in_dim, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.v_head = nn.Linear(64, 1)
+
+        init_layer_uniform(self.v_head)
         #############################
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         """Forward method implementation."""
         
         ############TODO#############
-
+        x = torch.tanh(self.fc1(state))
+        x = torch.tanh(self.fc2(x))
+        value = self.v_head(x)
         #############################
 
         return value
@@ -80,7 +100,22 @@ def compute_gae(
     """Compute gae."""
 
     ############TODO#############
+    gae_returns = []
+    gae = 0.0
 
+    nv = next_value
+
+    for t in reversed(range(len(rewards))):
+        r_t = rewards[t]
+        m_t = masks[t]
+        v_t = values[t]
+
+        delta = r_t + gamma * nv * m_t - v_t
+        gae = delta + gamma * tau * m_t * gae
+        ret_t = gae + v_t
+        gae_returns.insert(0, ret_t)
+
+        nv = v_t
     #############################
     return gae_returns
 
@@ -137,6 +172,7 @@ class PPOAgent:
         self.entropy_weight = args.entropy_weight
         self.seed = args.seed
         self.update_epoch = args.update_epoch
+        self.ckpt_path = args.ckpt_path
         
         # device: cpu / gpu
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -149,8 +185,8 @@ class PPOAgent:
         self.critic = Critic(self.obs_dim).to(self.device)
 
         # optimizer
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=0.001)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=0.005)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=args.actor_lr)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=args.critic_lr)
 
         # memory for training
         self.states: List[torch.Tensor] = []
@@ -236,13 +272,17 @@ class PPOAgent:
             # actor_loss
             ############TODO#############
             # actor_loss = ?
-            
+            surr1 = ratio * adv
+            surr2 = torch.clamp(ratio, 1.0 - self.epsilon, 1.0 + self.epsilon) * adv
+            entropy = dist.entropy().sum(dim=-1).mean()
+            actor_loss = -(torch.min(surr1, surr2).mean() + self.entropy_weight * entropy)
             #############################
 
             # critic_loss
             ############TODO#############
             # critic_loss = ?
-
+            value_pred = self.critic(state)
+            critic_loss = F.mse_loss(value_pred, return_)
             #############################
             
             # train critic
@@ -277,7 +317,7 @@ class PPOAgent:
         scores = []
         score = 0
         episode_count = 0
-        for ep in tqdm(range(1, self.num_episodes)):
+        for ep in (range(1, self.num_episodes)):
             score = 0
             print("\n")
             for _ in range(self.rollout_len):
@@ -292,7 +332,7 @@ class PPOAgent:
                 # if episode ends
                 if done[0][0]:
                     episode_count += 1
-                    state, _ = self.env.reset(seed=self.seed)
+                    state, _ = self.env.reset()
                     state = np.expand_dims(state, axis=0)
                     scores.append(score)
                     print(f"Episode {episode_count}: Total Reward = {score}")
@@ -301,6 +341,20 @@ class PPOAgent:
             actor_loss, critic_loss = self.update_model(next_state)
             actor_losses.append(actor_loss)
             critic_losses.append(critic_loss)
+            eval_score = self.eval()
+            wandb.log({
+                "total_step": self.total_step,
+                "actor_loss": actor_loss,
+                'critic_loss': critic_loss,
+                "eval_score": eval_score
+            })
+            os.makedirs(f"{self.ckpt_path}", exist_ok=True)
+            if ep % (self.num_episodes // 10) == 0:
+                torch.save({
+                    "actor": self.actor.state_dict(),
+                    "critic": self.critic.state_dict(),
+                }, f"{self.ckpt_path}/task3_{self.total_step}.pth")
+                print("Model saved ", ep)
 
         # termination
         self.env.close()
@@ -310,23 +364,59 @@ class PPOAgent:
         self.is_test = True
 
         tmp_env = self.env
-        self.env = gym.wrappers.RecordVideo(self.env, video_folder=video_folder)
+        # self.env = gym.wrappers.RecordVideo(self.env, video_folder=video_folder)
 
-        state, _ = self.env.reset(seed=self.seed)
-        done = False
-        score = 0
+        scores = []
+        for ep in range(20):
+            state, _ = self.env.reset(seed=self.seed + ep)
+            done = False
+            score = 0
 
-        while not done:
-            action = self.select_action(state)
-            next_state, reward, done = self.step(action)
+            while not done:
+                action = self.select_action(state)
+                action = action.reshape(self.action_dim,)
+                next_state, reward, done = self.step(action)
 
-            state = next_state
-            score += reward
+                state = next_state
+                score += reward[0][0]
 
-        print("score: ", score)
+            scores.append(score)
+            print(f"Episode {ep + 1}: Reward = {score}")
+
+        avg_score = np.mean(scores)
+        print(f"Average Reward over {len(scores)} episodes: {avg_score}")
         self.env.close()
 
         self.env = tmp_env
+    
+    def eval(self):
+        self.is_test = True
+
+        scores = []
+        for ep in range(3):
+            state, _ = self.env.reset()
+            done = False
+            score = 0
+
+            while not done:
+                action = self.select_action(state)
+                action = action.reshape(self.action_dim,)
+                next_state, reward, done = self.step(action)
+
+                state = next_state
+                score += reward[0][0]
+
+            scores.append(score)
+        avg_score = np.mean(scores)
+        print(f"Average Reward over {len(scores)} episodes: {avg_score}")
+        self.is_test = False
+        return avg_score
+    
+    def load_model(self, model_path: str):
+        checkpoint = torch.load(model_path, map_location=self.device)
+        self.actor.load_state_dict(checkpoint["actor"])
+        self.critic.load_state_dict(checkpoint["critic"])
+        print(f"Model loaded from {model_path}")
  
 def seed_torch(seed):
     torch.manual_seed(seed)
@@ -340,14 +430,16 @@ if __name__ == "__main__":
     parser.add_argument("--actor-lr", type=float, default=3e-4)
     parser.add_argument("--critic-lr", type=float, default=3e-4)
     parser.add_argument("--discount-factor", type=float, default=0.99)
-    parser.add_argument("--num-episodes", type=float, default=1000)
+    parser.add_argument("--num-episodes", type=int, default=1500)
     parser.add_argument("--seed", type=int, default=77)
-    parser.add_argument("--entropy-weight", type=int, default=1e-2) # entropy can be disabled by setting this to 0
+    parser.add_argument("--entropy-weight", type=float, default=1e-2) # entropy can be disabled by setting this to 0
     parser.add_argument("--tau", type=float, default=0.95)
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--epsilon", type=int, default=0.2)
-    parser.add_argument("--rollout-len", type=int, default=2000)  
-    parser.add_argument("--update-epoch", type=float, default=10)
+    parser.add_argument("--epsilon", type=float, default=0.2)
+    parser.add_argument("--rollout-len", type=int, default=2048)  
+    parser.add_argument("--update-epoch", type=int, default=10)
+    parser.add_argument("--ckpt_path", type=str, default="checkpoints3")
+    parser.add_argument("--test", action="store_true")
     args = parser.parse_args()
  
     # environment
@@ -356,7 +448,13 @@ if __name__ == "__main__":
     random.seed(seed)
     np.random.seed(seed)
     seed_torch(seed)
-    wandb.init(project="DLP-Lab7-PPO-Walker", name=args.wandb_run_name, save_code=True)
+    if not args.test:
+        wandb.init(project="DLP-Lab7-PPO-Walker", name=args.wandb_run_name, save_code=True)
     
     agent = PPOAgent(env, args)
-    agent.train()
+    if (args.test):
+        video_folder = f"videos/{args.wandb_run_name}"
+        agent.load_model("checkpoints3/task3_921601.pth")
+        agent.test(video_folder)
+    else:
+        agent.train()

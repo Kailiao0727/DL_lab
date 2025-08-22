@@ -319,6 +319,7 @@ class PPOAgent:
         scores = []
         score = 0
         episode_count = 0
+        best_score = -np.inf
         for ep in range(1, self.num_episodes):
             score = 0
             print("\n")
@@ -354,7 +355,7 @@ class PPOAgent:
                 'critic_loss': critic_loss,
                 "eval_score": eval_score
             })
-            if eval_score > -150:
+            if eval_score > best_score:
                 os.makedirs(f"{self.ckpt_path}", exist_ok=True)
                 print(f"New score: {eval_score}")
                 torch.save({
@@ -456,7 +457,7 @@ if __name__ == "__main__":
     agent = PPOAgent(env, args)
     if (args.test):
         video_folder = f"videos/{args.wandb_run_name}"
-        agent.load_model("checkpoints/best_model_196001.pth")
+        agent.load_model("snapshots/best_task2_196001.pth")
         agent.test(video_folder)
     else:
         agent.train()

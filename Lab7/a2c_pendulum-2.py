@@ -342,7 +342,7 @@ if __name__ == "__main__":
     agent = A2CAgent(env, args)
     if (args.test):
         video_folder = f"videos/{args.wandb_run_name}"
-        agent.load_model("snapshots/best_task1.pth")
+        agent.load_model("snapshots/best_task1_193000.pth")
         agent.test(video_folder)
     else:
         agent.train()
